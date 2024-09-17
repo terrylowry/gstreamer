@@ -1,0 +1,48 @@
+From e118d4a4b399066e8c4d0bd9c5e4816b7d91c20b Mon Sep 17 00:00:00 2001
+From: Nirbheek Chauhan <nirbheek@centricular.com>
+Date: Tue, 17 Sep 2024 19:42:40 +0530
+Subject: [PATCH] agent: Ignore keepalive timeout when receiving media
+
+This was the keepalive behaviour prior to 4a378b880ee which
+implemented RFC7675 consent freshness and accidentally regressed the
+behaviour when consent_freshness is disabled.
+---
+ agent/conncheck.c | 22 +++++++++++++++-------
+ 1 file changed, 15 insertions(+), 7 deletions(-)
+
+diff --git a/agent/conncheck.c b/agent/conncheck.c
+index 4b45080..48dbf0f 100644
+--- a/agent/conncheck.c
++++ b/agent/conncheck.c
+@@ -1274,13 +1274,21 @@ static gboolean priv_conn_remote_consent_tick_agent_locked (
+   now = g_get_monotonic_time();
+   if (now - pair->remote_consent.last_received > consent_timeout) {
+     guint64 time_since = now - pair->remote_consent.last_received;
+-    pair->remote_consent.have = FALSE;
+-    nice_debug ("Agent %p : pair %p consent for stream/component %u/%u timed "
+-         "out! -> FAILED.  Last consent received: %" G_GUINT64_FORMAT ".%" G_GUINT64_FORMAT "s ago",
+-        agent, pair, pair->keepalive.stream_id, pair->keepalive.component_id,
+-        time_since / G_USEC_PER_SEC, time_since % G_USEC_PER_SEC);
+-    agent_signal_component_state_change (agent, pair->keepalive.stream_id,
+-        pair->keepalive.component_id, NICE_COMPONENT_STATE_FAILED);
++    if (!agent->consent_freshness && agent->media_after_tick) {
++      nice_debug ("Agent %p : pair %p keepalive stream/component %u/%u timed "
++           "out! -> IGNORED (media received after timeout). Last keepalive "
++           "received: %" G_GUINT64_FORMAT ".%" G_GUINT64_FORMAT "s ago",
++          agent, pair, pair->keepalive.stream_id, pair->keepalive.component_id,
++          time_since / G_USEC_PER_SEC, time_since % G_USEC_PER_SEC);
++    } else {
++      pair->remote_consent.have = FALSE;
++      nice_debug ("Agent %p : pair %p consent for stream/component %u/%u timed "
++           "out! -> FAILED.  Last consent received: %" G_GUINT64_FORMAT ".%" G_GUINT64_FORMAT "s ago",
++          agent, pair, pair->keepalive.stream_id, pair->keepalive.component_id,
++          time_since / G_USEC_PER_SEC, time_since % G_USEC_PER_SEC);
++      agent_signal_component_state_change (agent, pair->keepalive.stream_id,
++          pair->keepalive.component_id, NICE_COMPONENT_STATE_FAILED);
++    }
+   } else {
+     guint64 delay = (consent_timeout - (now - pair->remote_consent.last_received)) / 1000;
+     nice_debug ("Agent %p : pair %p rechecking consent in %" G_GUINT64_FORMAT ".%03" G_GUINT64_FORMAT "s",
+-- 
+2.46.0
+
