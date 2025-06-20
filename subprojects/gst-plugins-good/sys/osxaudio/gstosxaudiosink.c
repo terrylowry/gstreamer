@@ -68,9 +68,11 @@
 #include <gst/audio/audio.h>
 #include <gst/audio/audio-channels.h>
 #include <gst/audio/gstaudioiec61937.h>
+#include <gst/audio/gstaudiosink.h>
 
 #include "gstosxaudiosink.h"
 #include "gstosxaudioelement.h"
+#include "gstosxcoreaudiocommon.h"
 
 GST_DEBUG_CATEGORY_STATIC (osx_audiosink_debug);
 #define GST_CAT_DEFAULT osx_audiosink_debug
@@ -254,9 +256,24 @@ gst_osx_audio_sink_set_property (GObject * object, guint prop_id,
 
   switch (prop_id) {
 #ifndef HAVE_IOS
-    case ARG_DEVICE:
-      sink->device_id = g_value_get_int (value);
+    case ARG_DEVICE:{
+      GstOsxAudioRingBuffer *ringbuf;
+      AudioDeviceID new_id = g_value_get_int (value);
+
+      /* Ringbuffer init/removal could happen at the same time */
+      GST_OBJECT_LOCK (sink);
+      ringbuf =
+          GST_OSX_AUDIO_RING_BUFFER (GST_AUDIO_BASE_SINK (sink)->ringbuffer);
+
+      if (ringbuf == NULL) {
+        sink->device_id = new_id;
+      } else if (gst_core_audio_change_ringbuf_device (ringbuf, new_id, FALSE)) {
+        sink->device_id = ringbuf->core_audio->device_id;
+        sink->unique_id = ringbuf->core_audio->unique_id;
+      }
+      GST_OBJECT_UNLOCK (sink);
       break;
+    }
 #else
     case ARG_CONFIGURE_SESSION:
       sink->configure_session = g_value_get_boolean (value);
@@ -282,10 +299,8 @@ gst_osx_audio_sink_change_state (GstElement * element,
 
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_NULL:
-      GST_OBJECT_LOCK (osxsink);
       osxsink->device_id = kAudioDeviceUnknown;
       osxsink->unique_id = NULL;
-      GST_OBJECT_UNLOCK (osxsink);
       break;
     default:
       break;

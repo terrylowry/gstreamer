@@ -117,29 +117,42 @@ _audio_system_get_devices (gint * ndevices)
 }
 
 static inline gboolean
-_audio_device_is_alive (AudioDeviceID device_id, gboolean output)
+_audio_device_is_usable (AudioDeviceID device_id, gboolean output)
 {
   OSStatus status = noErr;
-  int alive = FALSE;
-  UInt32 propertySize = sizeof (alive);
-  AudioObjectPropertyScope prop_scope;
+  UInt32 propertySize;
+  int is_alive = FALSE;
 
-  prop_scope = output ? kAudioDevicePropertyScopeOutput :
-      kAudioDevicePropertyScopeInput;
+  /* IsAlive doesn't verify the direction (input/output) at all,
+   * that's why we also check the stream count */
 
-  AudioObjectPropertyAddress audioDeviceAliveAddress = {
+  AudioObjectPropertyAddress isAliveAddress = {
     kAudioDevicePropertyDeviceIsAlive,
-    prop_scope,
+    kAudioObjectPropertyScopeGlobal,
     kAudioObjectPropertyElementMain
   };
 
-  status = AudioObjectGetPropertyData (device_id,
-      &audioDeviceAliveAddress, 0, NULL, &propertySize, &alive);
-  if (status != noErr) {
-    alive = FALSE;
+  AudioObjectPropertyAddress streamsAddress = {
+    kAudioDevicePropertyStreams,
+    output ? kAudioDevicePropertyScopeOutput : kAudioDevicePropertyScopeInput,
+    kAudioObjectPropertyElementMain
+  };
+
+  status = AudioObjectGetPropertyDataSize (device_id,
+      &streamsAddress, 0, NULL, &propertySize);
+  if (status != noErr || propertySize == 0) {
+    return FALSE;
   }
 
-  return alive;
+  propertySize = sizeof (is_alive);
+  status = AudioObjectGetPropertyData (device_id,
+      &isAliveAddress, 0, NULL, &propertySize, &is_alive);
+
+  if (status != noErr) {
+    return FALSE;
+  }
+
+  return is_alive;
 }
 
 static inline gboolean
@@ -1239,7 +1252,7 @@ gst_core_audio_select_device_impl (GstCoreAudio * core_audio)
       res = FALSE;
     }
   } else if (_audio_device_is_hidden (device_id)) {
-    if (_audio_device_is_alive (device_id, output)) {
+    if (_audio_device_is_usable (device_id, output)) {
       res = TRUE;
     } else {
       GST_ERROR ("Requested hidden device not usable");
@@ -1297,8 +1310,9 @@ gst_core_audio_select_device_impl (GstCoreAudio * core_audio)
 
     g_free (devices);
 
-    if (res && !_audio_device_is_alive (device_id, output)) {
-      GST_ERROR ("Requested device not usable");
+    if (res && !_audio_device_is_usable (device_id, output)) {
+      GST_ERROR ("Requested device not usable for %s",
+          output ? "output" : "input");
       res = FALSE;
     }
   }
@@ -1306,6 +1320,11 @@ gst_core_audio_select_device_impl (GstCoreAudio * core_audio)
   if (res) {
     core_audio->device_id = device_id;
     core_audio->is_default = (device_id == default_device_id);
+
+    g_free (core_audio->unique_id);
+    core_audio->unique_id =
+        gst_core_audio_device_get_prop (core_audio->device_id,
+        kAudioDevicePropertyDeviceUID);
   }
 
   return res;
