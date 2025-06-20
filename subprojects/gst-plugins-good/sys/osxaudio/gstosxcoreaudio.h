@@ -103,6 +103,9 @@ struct _GstCoreAudio
   AudioUnit audiounit;
   UInt32 recBufferSize; /* AudioUnitRender clobbers mDataByteSize */
   AudioBufferList *recBufferList;
+  AudioStreamBasicDescription recFormat;
+  guint32 inNumberFrames;
+  gboolean device_change_pending;
 
 #ifndef HAVE_IOS
   /* For SPDIF out */
@@ -119,6 +122,11 @@ struct _GstCoreAudio
   uint64_t anchor_hosttime_ns;
   uint32_t anchor_pend_samples;
   float rate_scalar;
+
+  /* For osxaudiosrc device switching */
+  GstClockTime last_sample_ts;
+  GstClockTime last_sample_host_time;
+  GstClockTime sample_ts_offset;
 
 #ifdef HAVE_IOS
   gdouble first_sample_time;
@@ -169,6 +177,10 @@ gboolean gst_core_audio_audio_device_is_spdif_avail          (AudioDeviceID devi
 
 
 gboolean gst_core_audio_select_device                        (GstCoreAudio * core_audio);
+
+void gst_core_audio_prepare_input_buffer_list                (GstCoreAudio * core_audio,
+                                                              AudioStreamBasicDescription format,
+                                                              guint32 frames_per_packet);
 
 GstCaps *
 gst_core_audio_probe_caps (GstCoreAudio * core_audio, GstCaps * in_caps);

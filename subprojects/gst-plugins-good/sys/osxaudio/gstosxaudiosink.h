@@ -106,4 +106,3 @@ GST_ELEMENT_REGISTER_DECLARE (osxaudiosink);
 G_END_DECLS
 
 #endif /* __GST_OSXAUDIOSINK_H__ */
-

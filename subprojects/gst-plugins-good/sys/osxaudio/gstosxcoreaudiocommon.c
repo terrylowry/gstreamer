@@ -569,6 +569,112 @@ gst_core_audio_dump_channel_layout (AudioChannelLayout * channel_layout)
 }
 
 #ifndef HAVE_IOS
+gboolean
+gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
+    const char *unique_id, AudioDeviceID device_id, gboolean is_src)
+{
+  GstAudioRingBuffer *base_ringbuf = GST_AUDIO_RING_BUFFER (ringbuf);
+  GstCoreAudio *core_audio = ringbuf->core_audio;
+  AudioDeviceID old_device_id = core_audio->device_id;
+  gboolean old_is_default = core_audio->is_default;
+  char *old_unique_id = g_strdup (core_audio->unique_id);
+  gboolean ret = TRUE;
+
+  /* Locking the ringbuf should be enough. Anything accessing buf->core_audio
+   * should also lock the ringbuf already (aside from SPDIF/passthrough mode,
+   * in which we don't support switching on-the-fly). */
+  GST_OBJECT_LOCK (ringbuf);
+
+  if (core_audio->is_passthrough) {
+    GST_WARNING_OBJECT (core_audio, "Cannot change device in passthrough mode");
+    ret = FALSE;
+    goto finish;
+  }
+
+  if (old_device_id == device_id) {
+    GST_DEBUG_OBJECT (core_audio, "Already using device %s (%d)",
+        old_unique_id, (int) device_id);
+    goto finish;
+  }
+
+  if (g_strcmp0 (old_unique_id, unique_id) == 0) {
+    GST_DEBUG_OBJECT (core_audio, "Already using device %s (%d)", unique_id,
+        (int) old_device_id);
+    goto finish;
+  }
+
+  core_audio->device_id = device_id;
+  g_free (core_audio->unique_id);
+  core_audio->unique_id = g_strdup (unique_id);
+
+  if (!gst_core_audio_select_device (core_audio)) {
+    /* This doesn't change is_default/unique_id unless it succeeds */
+    GST_ERROR_OBJECT (core_audio, "Device %d not found or not usable",
+        (int) device_id);
+    core_audio->device_id = old_device_id;
+    ret = FALSE;
+    goto finish;
+  }
+
+  if (core_audio->audiounit == NULL) {
+    /* gst_osx_audio_ring_buffer_open_device() hasn't been called yet,
+     * we're not switching live */
+    GST_DEBUG_OBJECT (core_audio,
+        "No AudioUnit initialized yet, nothing to change");
+    goto finish;
+  }
+
+  if (is_src) {
+    /* For inputs we always have to recreate the ringbuffer, as AudioUnitRender()
+     * doesn't want to resample. Set the flag and reinitialize in create(). */
+    core_audio->device_change_pending = TRUE;
+    goto finish;
+  }
+
+  if (!gst_core_audio_bind_device (core_audio)) {
+    /* When bind_device() fails, AudioUnit will usually shut itself down,
+     * so we need to bind back to the old device and restart our unit */
+    ret = FALSE;
+    if (unique_id)
+      GST_ERROR_OBJECT (core_audio, "Failed to bind to device %s, reverting",
+          unique_id);
+    else
+      GST_ERROR_OBJECT (core_audio, "Failed to bind to device %i, reverting",
+          (int) device_id);
+
+    /* select_device() changes these, so let's rewind */
+    core_audio->device_id = old_device_id;
+    core_audio->is_default = old_is_default;
+    g_free (core_audio->unique_id);
+    core_audio->unique_id = old_unique_id;
+
+    /* This can also fail in very rare cases (e.g. the original device got unplugged 
+     * in the meantime), stop the ringbuffer and shut things down when that happens */
+    if (!gst_core_audio_bind_device (core_audio)
+        || !gst_core_audio_start_processing (core_audio)) {
+      GST_ERROR_OBJECT (core_audio, "Failed to revert to device %s (%d)",
+          old_unique_id, (int) old_device_id);
+
+      gst_audio_ring_buffer_set_errored (base_ringbuf);
+      GST_AUDIO_RING_BUFFER_SIGNAL (base_ringbuf);
+    } else {
+      GST_DEBUG_OBJECT (core_audio, "Reverted to device %s (%d)",
+          old_unique_id, (int) old_device_id);
+    }
+
+    /* We transferred ownership to core_audio above */
+    old_unique_id = NULL;
+  } else {
+    GST_DEBUG_OBJECT (core_audio, "Changed active device to %d",
+        (int) device_id);
+  }
+
+finish:
+  GST_OBJECT_UNLOCK (ringbuf);
+  g_free (old_unique_id);
+  return ret;
+}
+
 char *
 gst_core_audio_device_get_prop_str (AudioDeviceID device_id,
     AudioObjectPropertyElement prop_id)
@@ -576,7 +682,7 @@ gst_core_audio_device_get_prop_str (AudioDeviceID device_id,
   OSStatus status = noErr;
   UInt32 propertySize = 0;
   CFStringRef prop_val;
-  gchar *result = NULL;
+  char *result = NULL;
 
   AudioObjectPropertyAddress propAddress = {
     prop_id,
@@ -643,3 +749,18 @@ gst_core_audio_device_get_prop_uint32 (AudioDeviceID device_id,
   return result;
 }
 #endif
+
+GstClockTime
+host_current_time_ns (GstCoreAudio * core_audio)
+{
+  guint64 mach_t = mach_absolute_time ();
+  return gst_util_uint64_scale (mach_t, core_audio->timebase.numer,
+      core_audio->timebase.denom);
+}
+
+GstClockTime
+host_time_to_ns (GstCoreAudio * core_audio, uint64_t host_time)
+{
+  return gst_util_uint64_scale (host_time, core_audio->timebase.numer,
+      core_audio->timebase.denom);
+}

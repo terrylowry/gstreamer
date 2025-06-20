@@ -24,6 +24,7 @@
 #pragma once
 
 #include "gstosxcoreaudio.h"
+#include "gstosxaudioringbuffer.h"
 #include <gst/audio/audio-channels.h>
 
 G_BEGIN_DECLS
@@ -74,6 +75,11 @@ GstAudioChannelPosition gst_core_audio_channel_label_to_gst (AudioChannelLabel l
 
 #ifndef HAVE_IOS
 
+gboolean gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
+                                               const char * unique_id,
+                                               AudioDeviceID device_id,
+                                               gboolean is_src);
+
 char * gst_core_audio_device_get_prop_str (AudioDeviceID device_id,
                                            AudioObjectPropertyElement prop_id);
 
@@ -81,5 +87,9 @@ UInt32 gst_core_audio_device_get_prop_uint32 (AudioDeviceID device_id,
                                               AudioObjectPropertyElement prop_id);
 
 #endif
+
+GstClockTime host_current_time_ns (GstCoreAudio * core_audio);
+
+GstClockTime host_time_to_ns (GstCoreAudio * core_audio, uint64_t host_time);
 
 G_END_DECLS
