@@ -103,6 +103,9 @@ struct _GstCoreAudio
   AudioUnit audiounit;
   UInt32 recBufferSize; /* AudioUnitRender clobbers mDataByteSize */
   AudioBufferList *recBufferList;
+  AudioStreamBasicDescription recFormat;
+  guint32 inNumberFrames;
+  gboolean device_change_pending;
 
 #ifndef HAVE_IOS
   /* For SPDIF out */
@@ -169,6 +172,10 @@ gboolean gst_core_audio_audio_device_is_spdif_avail          (AudioDeviceID devi
 
 
 gboolean gst_core_audio_select_device                        (GstCoreAudio * core_audio);
+
+void gst_core_audio_prepare_input_buffer_list                (GstCoreAudio * core_audio,
+                                                              AudioStreamBasicDescription format,
+                                                              guint32 frames_per_packet);
 
 GstCaps *
 gst_core_audio_probe_caps (GstCoreAudio * core_audio, GstCaps * in_caps);

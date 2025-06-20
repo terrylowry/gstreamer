@@ -95,6 +95,7 @@ gst_core_audio_init (GstCoreAudio * core_audio)
   core_audio->unique_id = NULL;
   core_audio->is_src = FALSE;
   core_audio->audiounit = NULL;
+  core_audio->device_change_pending = FALSE;
   core_audio->cached_caps = NULL;
   core_audio->cached_caps_valid = FALSE;
 #ifndef HAVE_IOS
@@ -396,6 +397,25 @@ gst_core_audio_update_timing (GstCoreAudio * core_audio,
   }
 }
 
+void
+gst_core_audio_prepare_input_buffer_list (GstCoreAudio * core_audio,
+    AudioStreamBasicDescription format, guint32 frames_per_packet)
+{
+  core_audio->recBufferSize = frames_per_packet * format.mBytesPerFrame;
+
+  GST_DEBUG_OBJECT (core_audio,
+      "Allocating record buffers %u bytes %u frames",
+      core_audio->recBufferSize, frames_per_packet);
+
+  core_audio->recBufferList =
+      buffer_list_alloc (format.mChannelsPerFrame, core_audio->recBufferSize,
+      /* Currently always TRUE (i.e. interleaved) */
+      !(format.mFormatFlags & kAudioFormatFlagIsNonInterleaved));
+
+  core_audio->inNumberFrames = frames_per_packet;
+  core_audio->recFormat = format;
+}
+
 gboolean
 gst_core_audio_initialize (GstCoreAudio * core_audio,
     AudioStreamBasicDescription format, GstCaps * caps,
@@ -412,17 +432,11 @@ gst_core_audio_initialize (GstCoreAudio * core_audio,
 
   if (core_audio->is_src) {
     /* create AudioBufferList needed for recording */
-    core_audio->recBufferSize = frames_per_packet * format.mBytesPerFrame;
-
-    GST_DEBUG_OBJECT (core_audio,
-        "Allocating record buffers %u bytes %u frames",
-        core_audio->recBufferSize, frames_per_packet);
-
-    core_audio->recBufferList =
-        buffer_list_alloc (format.mChannelsPerFrame, core_audio->recBufferSize,
-        /* Currently always TRUE (i.e. interleaved) */
-        !(format.mFormatFlags & kAudioFormatFlagIsNonInterleaved));
+    gst_core_audio_prepare_input_buffer_list (core_audio, format,
+        frames_per_packet);
   }
+
+  core_audio->device_change_pending = FALSE;
 
   return TRUE;
 }
@@ -444,16 +458,7 @@ gst_core_audio_set_volume (GstCoreAudio * core_audio, gfloat volume)
 gboolean
 gst_core_audio_select_device (GstCoreAudio * core_audio)
 {
-  gboolean ret = gst_core_audio_select_device_impl (core_audio);
-
-#ifndef HAVE_IOS
-  if (core_audio->device_id != kAudioDeviceUnknown)
-    core_audio->unique_id =
-        gst_core_audio_device_get_prop (core_audio->device_id,
-        kAudioDevicePropertyDeviceUID);
-#endif
-
-  return ret;
+  return gst_core_audio_select_device_impl (core_audio);
 }
 
 void
