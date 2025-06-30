@@ -545,6 +545,7 @@ gst_audio_base_src_setcaps (GstBaseSrc * bsrc, GstCaps * caps)
   /* Round to an integer number of samples */
   spec->segsize -= spec->segsize % bpf;
   spec->segtotal = spec->buffer_time / spec->latency_time;
+  src->next_sample = -1;
 
   GST_OBJECT_UNLOCK (src);
 
