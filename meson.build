@@ -126,9 +126,9 @@ subprojects = [
 
 if get_option('build-tools-source') == 'subproject'
   if build_system == 'windows'
-    subproject('win-flex-bison-binaries')
-    subproject('win-nasm')
-    subproject('win-pkgconfig')
+    #subproject('win-flex-bison-binaries')
+    #subproject('win-nasm')
+    #subproject('win-pkgconfig')
   elif build_system == 'darwin'
     subproject('macos-bison-binary')
     # Newer macOS provides /usr/lib/pkgconfig/libpcre2-8.pc which is broken

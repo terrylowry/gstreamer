@@ -1,0 +1,9 @@
+[wrap-file]
+directory = win-flex-bison-binaries
+
+source_url = https://127.0.0.1/win-flex-bison-binaries.zip
+source_filename = /dev/null
+source_hash = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+
+[provide]
+program_names = flex, bison

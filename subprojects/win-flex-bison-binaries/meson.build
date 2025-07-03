@@ -2,6 +2,10 @@ project('win-flex-bison-binary', version : '2.5.25')
 
 py3 = import('python3').find_python()
 
+if host_machine.system() != 'windows'
+  error('Can only download flex and bison for Windows, sorry')
+endif
+
 message('Downloading and extracting win-flex-bison binaries...')
 
 zip_hash = '8d324b62be33604b2c45ad1dd34ab93d722534448f55a16ca7292de32b6ac135'
