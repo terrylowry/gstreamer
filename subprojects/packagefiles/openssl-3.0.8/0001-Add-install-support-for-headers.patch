@@ -1,0 +1,42 @@
+From c4aa6b87847abef2cb2a46ff0fa964bf53e00376 Mon Sep 17 00:00:00 2001
+From: "L. E. Segovia" <amy@centricular.com>
+Date: Fri, 4 Jul 2025 18:07:43 -0300
+Subject: [PATCH] Add install support for headers
+
+---
+ meson.build | 22 ++++++++++++++++++++++
+ 1 file changed, 22 insertions(+)
+
+diff --git a/meson.build b/meson.build
+index 28ddac6..1aa2688 100644
+--- a/meson.build
++++ b/meson.build
+@@ -388,3 +388,25 @@ openssl_cli = executable(
+   c_args: c_args,
+   install: cli_opt,
+ )
++python3 = import('python').find_installation()
++headers = run_command(python3, '-c', '''import sys
++from pathlib import Path
++srcdir = Path(sys.argv[1])
++headers = list(f for f in Path(srcdir, 'include', 'openssl').glob('*.h') if not f.name.startswith('__DECC_'))
++for p in headers:
++  print(p.relative_to(srcdir).as_posix())
++genasmdir = Path(sys.argv[2])
++headers = list(f for f in Path(genasmdir, 'include', 'openssl').glob('*.h'))
++for p in headers:
++  print(p.relative_to(srcdir).as_posix())
++''',
++  meson.current_source_dir(),
++  meson.current_source_dir() / 'generated-config/archs' / arch_subdir / asm,
++  check: true,
++  capture: true,
++).stdout().strip().split('\n')
++
++install_headers(
++  headers,
++  subdir: 'openssl'
++)
+-- 
+2.47.0.windows.2
+
