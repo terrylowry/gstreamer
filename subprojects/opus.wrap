@@ -2,6 +2,7 @@
 directory=opus
 url=https://gitlab.xiph.org/xiph/opus.git
 revision=6b6035ae4a29abbd237463d84a45fbeb0d92bc18
+diff_files = opus/0001-meson-Fix-symbol-leaks-on-Windows.patch
 
 [provide]
 opus=opus_dep
