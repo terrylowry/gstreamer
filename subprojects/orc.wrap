@@ -2,7 +2,8 @@
 directory = orc
 url = https://gitlab.freedesktop.org/gstreamer/orc.git
 push-url = git@gitlab.freedesktop.org:gstreamer/orc.git
-revision = main
+revision = 0.4.38
+diff_files = orc-0.4.38/0001-meson-fix-symbols-leaking-from-static-library-on-Win.patch
 
 [provide]
 orc-0.4 = orc_dep

@@ -1,0 +1,118 @@
+From d385aaad799a667e23ab59386af8da8ae5102044 Mon Sep 17 00:00:00 2001
+From: "L. E. Segovia" <amy@centricular.com>
+Date: Sun, 6 Jul 2025 15:13:07 +0000
+Subject: [PATCH] meson: fix symbols leaking from static library on Windows
+
+Without ORC_STATIC_COMPILATION, these symbols will get treated as if
+they were compiled for a DLL. In turn, they will be forcibly
+(incorrectly) exported from any downstream DLL or EXE that consumes
+them.
+---
+ meson.build          |  2 +-
+ orc-test/meson.build | 20 +++++++++++++++-----
+ orc/meson.build      | 18 ++++++++++++++----
+ 3 files changed, 30 insertions(+), 10 deletions(-)
+
+diff --git a/meson.build b/meson.build
+index 6d03271..f5b84c7 100644
+--- a/meson.build
++++ b/meson.build
+@@ -1,5 +1,5 @@
+ project ('orc', 'c', version : '0.4.38',
+-                     meson_version : '>= 0.55.0',
++                     meson_version : '>= 1.3.0',
+                      default_options : ['buildtype=debugoptimized',
+                                         'warning_level=1'] )
+ 
+diff --git a/orc-test/meson.build b/orc-test/meson.build
+index 20bcd63..e95cccd 100644
+--- a/orc-test/meson.build
++++ b/orc-test/meson.build
+@@ -3,20 +3,29 @@ orc_test_sources = ['orctest.c', 'orcarray.c', 'orcrandom.c', 'orcprofile.c']
+ 
+ install_headers(orc_test_headers, subdir : 'orc-' + orc_api + '/orc-test')
+ 
++orc_test_lib_args = orc_c_args + ['-DBUILDING_ORC_TEST']
++orc_test_static_cargs = ['-DORC_STATIC_COMPILATION']
++
+ orc_test_lib = library ('orc-test-' + orc_api,
+   orc_test_sources,
+   version : libversion,
+   soversion : soversion,
+   darwin_versions : osxversion,
+   include_directories : orc_inc,
+-  c_args : orc_c_args + ['-DBUILDING_ORC_TEST'],
++  c_args : orc_test_lib_args,
++  c_static_args : orc_test_lib_args + orc_test_static_cargs,
+   dependencies : [libm, orc_dep],
+   install : true)
+ 
++# https://github.com/mesonbuild/meson/pull/12632
+ orc_test_dep_cargs = []
+-
+-if get_option('default_library') == 'static'
+-  orc_test_dep_cargs += ['-DORC_STATIC_COMPILATION']
++if get_option('default_library') == 'both'
++  orc_test_dep_lib = orc_test_lib.get_shared_lib()
++else
++  orc_test_dep_lib = orc_test_lib
++  if get_option('default_library') == 'static'
++    orc_test_dep_cargs = orc_test_static_cargs
++  endif
+ endif
+ 
+ # pkg-config file
+@@ -28,4 +37,5 @@ pkg.generate(orc_test_lib,
+   libraries: [libm, orc_dep])
+ 
+ orc_test_dep = declare_dependency(include_directories : orc_inc,
+-  link_with : orc_test_lib)
++  link_with : orc_test_dep_lib,
++  compile_args : orc_test_dep_cargs)
+diff --git a/orc/meson.build b/orc/meson.build
+index 71e33e9..5a32893 100644
+--- a/orc/meson.build
++++ b/orc/meson.build
+@@ -113,25 +113,35 @@ if host_os != 'windows'
+   orc_dependencies += threads
+ endif
+ 
++orc_lib_args = orc_c_args + ['-DBUILDING_ORC']
++orc_static_cargs = ['-DORC_STATIC_COMPILATION']
++
+ orc_lib = library ('orc-' + orc_api,
+   orc_sources,
+   version : libversion,
+   soversion : soversion,
+   darwin_versions : osxversion,
+   include_directories : orc_inc,
+-  c_args : orc_c_args + ['-DBUILDING_ORC'],
++  c_args : orc_lib_args,
++  c_static_args : orc_lib_args + orc_static_cargs,
+   dependencies : orc_dependencies,
+   install : true)
+ 
++# https://github.com/mesonbuild/meson/pull/12632
+ orc_dep_cargs = []
+-if get_option('default_library') == 'static'
+-  orc_dep_cargs += ['-DORC_STATIC_COMPILATION']
++if get_option('default_library') == 'both'
++  orc_dep_lib = orc_lib.get_shared_lib()
++else
++  orc_dep_lib = orc_lib
++  if get_option('default_library') == 'static'
++    orc_dep_cargs = orc_static_cargs
++  endif
+ endif
+ 
+ orc_dep = declare_dependency(include_directories : orc_inc,
+                              dependencies : orc_dependencies,
+                              compile_args : orc_dep_cargs,
+-                             link_with : orc_lib)
++                             link_with : orc_dep_lib)
+ 
+ executable ('generate-bytecode',
+   'generate-bytecode.c',
+-- 
+2.47.0.windows.2
+
