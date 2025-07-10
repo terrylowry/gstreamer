@@ -120,6 +120,7 @@ gst_wasapi2_src_loopback_mode_get_type (void)
 #define DEFAULT_LOOPBACK      FALSE
 #define DEFAULT_LOOPBACK_MODE GST_WASAPI2_SRC_LOOPBACK_DEFAULT
 #define DEFAULT_LOOPBACK_SILENCE_ON_DEVICE_MUTE FALSE
+#define DEFAULT_CONTINUE_ON_ERROR FALSE
 
 enum
 {
@@ -133,6 +134,7 @@ enum
   PROP_LOOPBACK_MODE,
   PROP_LOOPBACK_TARGET_PID,
   PROP_LOOPBACK_SILENCE_ON_DEVICE_MUTE,
+  PROP_CONTINUE_ON_ERROR,
 };
 
 /* *INDENT-OFF* */
@@ -156,6 +158,7 @@ struct GstWasapi2SrcPrivate
   guint loopback_pid = 0;
   gboolean loopback_silence_on_device_mute =
       DEFAULT_LOOPBACK_SILENCE_ON_DEVICE_MUTE;
+  gboolean continue_on_error = DEFAULT_CONTINUE_ON_ERROR;
 };
 /* *INDENT-ON* */
 
@@ -300,6 +303,24 @@ gst_wasapi2_src_class_init (GstWasapi2SrcClass * klass)
           (GParamFlags) (GST_PARAM_MUTABLE_PLAYING | G_PARAM_READWRITE |
               G_PARAM_STATIC_STRINGS)));
 
+  /**
+   * GstWasapi2Src:continue-on-error:
+   *
+   * If enabled, wasapi2src will post a warning message instead of an error,
+   * when device failures occur, such as open failure, I/O error,
+   * or device removal.
+   * The element will continue to produce audio buffers and behave as if
+   * a capture device were active, allowing pipeline to keep running even when
+   * no audio endpoint is available
+   *
+   * Since: 1.28
+   */
+  g_object_class_install_property (gobject_class, PROP_CONTINUE_ON_ERROR,
+      g_param_spec_boolean ("continue-on-error", "Continue On Error",
+          "Continue running and produce buffers on device failure",
+          DEFAULT_CONTINUE_ON_ERROR, (GParamFlags) (GST_PARAM_MUTABLE_READY |
+              G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+
   gst_element_class_add_static_pad_template (element_class, &src_template);
   gst_element_class_set_static_metadata (element_class, "Wasapi2Src",
       "Source/Audio/Hardware",
@@ -435,6 +456,11 @@ gst_wasapi2_src_set_property (GObject * object, guint prop_id,
       gst_wasapi2_rbuf_set_device_mute_monitoring (priv->rbuf,
           priv->loopback_silence_on_device_mute);
       break;
+    case PROP_CONTINUE_ON_ERROR:
+      priv->continue_on_error = g_value_get_boolean (value);
+      gst_wasapi2_rbuf_set_continue_on_error (priv->rbuf,
+          priv->continue_on_error);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;
@@ -474,6 +500,9 @@ gst_wasapi2_src_get_property (GObject * object, guint prop_id,
       break;
     case PROP_LOOPBACK_SILENCE_ON_DEVICE_MUTE:
       g_value_set_boolean (value, priv->loopback_silence_on_device_mute);
+      break;
+    case PROP_CONTINUE_ON_ERROR:
+      g_value_set_boolean (value, priv->continue_on_error);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);

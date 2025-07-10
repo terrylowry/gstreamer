@@ -52,5 +52,8 @@ gdouble          gst_wasapi2_rbuf_get_volume (GstWasapi2Rbuf * rbuf);
 void             gst_wasapi2_rbuf_set_device_mute_monitoring (GstWasapi2Rbuf * rbuf,
                                                               gboolean value);
 
+void             gst_wasapi2_rbuf_set_continue_on_error (GstWasapi2Rbuf * rbuf,
+                                                         gboolean value);
+
 G_END_DECLS
 
