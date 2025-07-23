@@ -427,7 +427,7 @@ is_equal_device_id (const gchar * a, const gchar * b)
 
 static HRESULT
 initialize_audio_client3 (IAudioClient * client_handle,
-    WAVEFORMATEX * mix_format, guint * period)
+    WAVEFORMATEX * mix_format, guint * period, DWORD extra_flags)
 {
   HRESULT hr = S_OK;
   UINT32 default_period, fundamental_period, min_period, max_period;
@@ -435,6 +435,8 @@ initialize_audio_client3 (IAudioClient * client_handle,
    * InitializeSharedAudioStream */
   DWORD stream_flags = AUDCLNT_STREAMFLAGS_EVENTCALLBACK;
   ComPtr < IAudioClient3 > audio_client;
+
+  stream_flags |= extra_flags;
 
   hr = client_handle->QueryInterface (IID_PPV_ARGS (&audio_client));
   if (!gst_wasapi2_result (hr)) {
@@ -684,6 +686,7 @@ gst_wasapi2_device_manager_create_ctx (IMMDeviceEnumerator * enumerator,
     }
   }
 
+  DWORD stream_flags = 0;
   if (!desc->mix_format) {
     ctx->client->GetMixFormat (&ctx->mix_format);
     if (!ctx->mix_format && gst_wasapi2_is_process_loopback_class (endpoint_class)) {
@@ -727,18 +730,21 @@ gst_wasapi2_device_manager_create_ctx (IMMDeviceEnumerator * enumerator,
       }
 
       if (!gst_caps_is_equal (new_caps, old_caps)) {
-        GST_ERROR ("Closest caps is different, old: %" GST_PTR_FORMAT
-            "new : %" GST_PTR_FORMAT, old_caps, new_caps);
+        GST_INFO ("Closest caps is different, old: %" GST_PTR_FORMAT
+            ", new : %" GST_PTR_FORMAT, old_caps, new_caps);
+        /* Hope OS mixer can convert the format */
         gst_caps_unref (new_caps);
         gst_caps_unref (old_caps);
         CoTaskMemFree (closest);
-        return;
+        ctx->mix_format = copy_wave_format (desc->mix_format);
+        stream_flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM |
+            AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+      } else {
+        gst_caps_unref (new_caps);
+        gst_caps_unref (old_caps);
+
+        ctx->mix_format = closest;
       }
-
-      gst_caps_unref (new_caps);
-      gst_caps_unref (old_caps);
-
-      ctx->mix_format = closest;
     } else {
       GST_ERROR ("Format not supported");
       return;
@@ -755,11 +761,11 @@ gst_wasapi2_device_manager_create_ctx (IMMDeviceEnumerator * enumerator,
   if (desc->low_latency && !gst_wasapi2_is_loopback_class (endpoint_class) &&
       !gst_wasapi2_is_process_loopback_class (endpoint_class)) {
     hr = initialize_audio_client3 (ctx->client.Get (), ctx->mix_format,
-        &ctx->period);
+        &ctx->period, stream_flags);
   }
 
   if (FAILED (hr)) {
-    DWORD extra_flags = 0;
+    DWORD extra_flags = stream_flags;
     if (gst_wasapi2_is_loopback_class (endpoint_class))
       extra_flags = AUDCLNT_STREAMFLAGS_LOOPBACK;
 
