@@ -923,7 +923,7 @@ struct Wasapi2DeviceManager
   RbufCtxPtr
   CreateCtx (const std::string & device_id,
       GstWasapi2EndpointClass endpoint_class, guint pid, gint64 buffer_time,
-      gint64 latency_time, WAVEFORMATEX * mix_format)
+      gint64 latency_time, gboolean low_latency, WAVEFORMATEX * mix_format)
   {
     auto desc = std::make_shared<RbufCtxDesc> ();
     desc->device_id = device_id;
@@ -931,6 +931,7 @@ struct Wasapi2DeviceManager
     desc->pid = pid;
     desc->buffer_time = buffer_time;
     desc->latency_time = latency_time;
+    desc->low_latency = low_latency;
     if (mix_format)
       desc->mix_format = copy_wave_format (mix_format);
 
@@ -948,7 +949,7 @@ struct Wasapi2DeviceManager
   void
   CreateCtxAsync (GstWasapi2Rbuf * rbuf, const std::string & device_id,
       GstWasapi2EndpointClass endpoint_class, guint pid, gint64 buffer_time,
-      gint64 latency_time, WAVEFORMATEX * mix_format)
+      gint64 latency_time, gboolean low_latency, WAVEFORMATEX * mix_format)
   {
     auto desc = std::make_shared<RbufCtxDesc> ();
     desc->rbuf = (GstWasapi2Rbuf *) gst_object_ref (rbuf);
@@ -957,6 +958,7 @@ struct Wasapi2DeviceManager
     desc->pid = pid;
     desc->buffer_time = buffer_time;
     desc->latency_time = latency_time;
+    desc->low_latency = low_latency;
     if (mix_format)
       desc->mix_format = copy_wave_format (mix_format);
 
@@ -1260,7 +1262,8 @@ gst_wasapi2_rbuf_create_ctx (GstWasapi2Rbuf * self)
   auto inst = Wasapi2DeviceManager::GetInstance ();
 
   return inst->CreateCtx (priv->device_id, priv->endpoint_class,
-      priv->pid, buffer_time, latency_time, priv->mix_format);
+      priv->pid, buffer_time, latency_time, priv->low_latency,
+      priv->mix_format);
 }
 
 static void
@@ -1283,7 +1286,8 @@ gst_wasapi2_rbuf_create_ctx_async (GstWasapi2Rbuf * self)
   auto inst = Wasapi2DeviceManager::GetInstance ();
 
   inst->CreateCtxAsync (self, priv->device_id, priv->endpoint_class,
-      priv->pid, buffer_time, latency_time, priv->mix_format);
+      priv->pid, buffer_time, latency_time, priv->low_latency,
+      priv->mix_format);
 }
 
 static gboolean
