@@ -1704,6 +1704,10 @@ gst_wasapi2_rbuf_process_acquire (GstWasapi2Rbuf * self,
   spec->segsize = period_frames * bpf;
   spec->segtotal = MAX (segtotal, 2);
 
+  /* Since we allocates large buffer (large segtotal) for device switching,
+   * update seglatency to reasonable value */
+  spec->seglatency = 2;
+
   GST_INFO_OBJECT (self,
       "Buffer size: %d frames, period: %d frames, segsize: %d bytes, "
       "segtotal: %d", client_buf_size, period_frames,
