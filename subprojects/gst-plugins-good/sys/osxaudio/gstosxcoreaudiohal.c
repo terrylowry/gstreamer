@@ -1323,7 +1323,7 @@ gst_core_audio_select_device_impl (GstCoreAudio * core_audio)
 
     g_free (core_audio->unique_id);
     core_audio->unique_id =
-        gst_core_audio_device_get_prop (core_audio->device_id,
+        gst_core_audio_device_get_prop_str (core_audio->device_id,
         kAudioDevicePropertyDeviceUID);
   }
 

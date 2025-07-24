@@ -74,8 +74,11 @@ gboolean gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
                                                AudioDeviceID device_id,
                                                gboolean is_src);
 
-char * gst_core_audio_device_get_prop (AudioDeviceID device_id,
-                                       AudioObjectPropertyElement prop_id);
+char * gst_core_audio_device_get_prop_str (AudioDeviceID device_id,
+                                           AudioObjectPropertyElement prop_id);
+
+UInt32 gst_core_audio_device_get_prop_uint32 (AudioDeviceID device_id,
+                                              AudioObjectPropertyElement prop_id);
 #endif
 
 GstClockTime host_current_time_ns (GstCoreAudio * core_audio);
