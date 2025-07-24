@@ -15,7 +15,6 @@ if osxaudio_option.disabled() or not ['darwin', 'ios'].contains(host_system)
 endif
 
 if host_system == 'darwin'
-  # TODO: https://github.com/mesonbuild/meson/issues/3940
   have_osxaudio = cc.has_header('CoreAudio/CoreAudio.h', required: osxaudio_option)
   osxaudio_sources += ['gstosxaudiodeviceprovider.c']
 elif host_system == 'ios'
