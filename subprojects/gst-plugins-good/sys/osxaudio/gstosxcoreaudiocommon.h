@@ -72,8 +72,11 @@ GstAudioChannelPosition gst_core_audio_channel_label_to_gst (AudioChannelLabel l
 gboolean gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf, AudioDeviceID device_id,
                                                gboolean is_src);
 
-char * gst_core_audio_device_get_prop (AudioDeviceID device_id,
-                                       AudioObjectPropertyElement prop_id);
+char * gst_core_audio_device_get_prop_str (AudioDeviceID device_id,
+                                           AudioObjectPropertyElement prop_id);
+
+UInt32 gst_core_audio_device_get_prop_uint32 (AudioDeviceID device_id,
+                                              AudioObjectPropertyElement prop_id);
 #endif
 
 G_END_DECLS
