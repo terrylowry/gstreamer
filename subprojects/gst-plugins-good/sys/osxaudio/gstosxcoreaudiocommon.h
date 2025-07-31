@@ -20,6 +20,7 @@
  * Boston, MA 02111-1307, USA.
  *
  */
+#pragma once
 
 #include "gstosxcoreaudio.h"
 #include <gst/audio/audio-channels.h>
