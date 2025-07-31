@@ -108,6 +108,7 @@ static void gst_osx_audio_sink_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
 static void gst_osx_audio_sink_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
+static void gst_osx_audio_sink_finalize (GObject * object);
 
 static GstStateChangeReturn
 gst_osx_audio_sink_change_state (GstElement * element,
@@ -173,6 +174,7 @@ gst_osx_audio_sink_class_init (GstOsxAudioSinkClass * klass)
 
   gobject_class->set_property = gst_osx_audio_sink_set_property;
   gobject_class->get_property = gst_osx_audio_sink_get_property;
+  gobject_class->finalize = gst_osx_audio_sink_finalize;
 
   gstelement_class->change_state =
       GST_DEBUG_FUNCPTR (gst_osx_audio_sink_change_state);
@@ -188,7 +190,7 @@ gst_osx_audio_sink_class_init (GstOsxAudioSinkClass * klass)
   g_object_class_install_property (gobject_class, ARG_UNIQUE_ID,
       g_param_spec_string ("unique-id", "Unique ID",
           "Unique persistent ID for the input device",
-          NULL, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS));
+          NULL, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 #else
   /**
    * GstOsxAudioSink:configure-session:
@@ -249,15 +251,23 @@ gst_osx_audio_sink_init (GstOsxAudioSink * sink)
 }
 
 static void
+gst_osx_audio_sink_finalize (GObject * object)
+{
+  GstOsxAudioSink *sink = GST_OSX_AUDIO_SINK (object);
+  g_clear_pointer (&sink->unique_id, g_free);
+  G_OBJECT_CLASS (parent_class)->finalize (object);
+}
+
+static void
 gst_osx_audio_sink_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
+  GstOsxAudioRingBuffer *ringbuf;
   GstOsxAudioSink *sink = GST_OSX_AUDIO_SINK (object);
 
   switch (prop_id) {
 #ifndef HAVE_IOS
     case ARG_DEVICE:{
-      GstOsxAudioRingBuffer *ringbuf;
       AudioDeviceID new_id = g_value_get_int (value);
 
       /* Ringbuffer init/removal could happen at the same time */
@@ -267,9 +277,32 @@ gst_osx_audio_sink_set_property (GObject * object, guint prop_id,
 
       if (ringbuf == NULL) {
         sink->device_id = new_id;
-      } else if (gst_core_audio_change_ringbuf_device (ringbuf, new_id, FALSE)) {
+        g_clear_pointer (&sink->unique_id, g_free);
+      } else if (gst_core_audio_change_ringbuf_device (ringbuf, NULL, new_id,
+              FALSE)) {
         sink->device_id = ringbuf->core_audio->device_id;
-        sink->unique_id = ringbuf->core_audio->unique_id;
+        g_free (sink->unique_id);
+        sink->unique_id = g_strdup (ringbuf->core_audio->unique_id);
+      }
+      GST_OBJECT_UNLOCK (sink);
+      break;
+    }
+    case ARG_UNIQUE_ID:{
+      const char *unique_id = g_value_get_string (value);
+
+      /* Ringbuffer init/removal could happen at the same time */
+      GST_OBJECT_LOCK (sink);
+      ringbuf =
+          GST_OSX_AUDIO_RING_BUFFER (GST_AUDIO_BASE_SINK (sink)->ringbuffer);
+
+      if (ringbuf == NULL) {
+        sink->device_id = kAudioDeviceUnknown;
+        sink->unique_id = g_strdup (unique_id);
+      } else if (gst_core_audio_change_ringbuf_device (ringbuf, unique_id,
+              kAudioDeviceUnknown, FALSE)) {
+        sink->device_id = ringbuf->core_audio->device_id;
+        g_free (sink->unique_id);
+        sink->unique_id = g_strdup (ringbuf->core_audio->unique_id);
       }
       GST_OBJECT_UNLOCK (sink);
       break;
@@ -300,7 +333,7 @@ gst_osx_audio_sink_change_state (GstElement * element,
   switch (transition) {
     case GST_STATE_CHANGE_READY_TO_NULL:
       osxsink->device_id = kAudioDeviceUnknown;
-      osxsink->unique_id = NULL;
+      g_clear_pointer (&osxsink->unique_id, g_free);
       break;
     default:
       break;
@@ -321,7 +354,8 @@ gst_osx_audio_sink_change_state (GstElement * element,
       if (ringbuffer->core_audio->device_id != osxsink->device_id) {
         GST_OBJECT_LOCK (osxsink);
         osxsink->device_id = ringbuffer->core_audio->device_id;
-        osxsink->unique_id = ringbuffer->core_audio->unique_id;
+        g_free (osxsink->unique_id);
+        osxsink->unique_id = g_strdup (ringbuffer->core_audio->unique_id);
         GST_OBJECT_UNLOCK (osxsink);
         g_object_notify (G_OBJECT (osxsink), "device");
       }
@@ -566,8 +600,8 @@ gst_osx_audio_sink_create_ringbuffer (GstAudioBaseSink * sink)
       GST_OSX_AUDIO_ELEMENT_GET_INTERFACE (osxsink),
       (void *) gst_osx_audio_sink_io_proc);
 
-  ringbuffer->core_audio = g_object_new (GST_TYPE_CORE_AUDIO,
-      "is-src", FALSE, "device", osxsink->device_id,
+  ringbuffer->core_audio = g_object_new (GST_TYPE_CORE_AUDIO, "is-src", FALSE,
+      "device", osxsink->device_id, "unique-id", osxsink->unique_id,
 #ifdef HAVE_IOS
       "configure-session", osxsink->configure_session,
 #endif

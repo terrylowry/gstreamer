@@ -205,8 +205,8 @@ gst_core_audio_bind_device (GstCoreAudio * core_audio)
   OSStatus status;
 
   /* Specify which device we're using. */
-  GST_DEBUG_OBJECT (core_audio->osxbuf, "Bind AudioUnit to device %d",
-      (int) core_audio->device_id);
+  GST_DEBUG_OBJECT (core_audio->osxbuf, "Bind AudioUnit to device %s",
+      core_audio->unique_id);
   status = AudioUnitSetProperty (core_audio->audiounit,
       kAudioOutputUnitProperty_CurrentDevice, kAudioUnitScope_Global, 0,
       &core_audio->device_id, sizeof (AudioDeviceID));
@@ -571,7 +571,7 @@ gst_core_audio_dump_channel_layout (AudioChannelLayout * channel_layout)
 #ifndef HAVE_IOS
 gboolean
 gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
-    AudioDeviceID device_id, gboolean is_src)
+    const char *unique_id, AudioDeviceID device_id, gboolean is_src)
 {
   GstAudioRingBuffer *base_ringbuf = GST_AUDIO_RING_BUFFER (ringbuf);
   GstCoreAudio *core_audio = ringbuf->core_audio;
@@ -592,11 +592,20 @@ gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
   }
 
   if (old_device_id == device_id) {
-    GST_DEBUG_OBJECT (core_audio, "Already using device %d", (int) device_id);
+    GST_DEBUG_OBJECT (core_audio, "Already using device %s (%d)",
+        old_unique_id, (int) device_id);
+    goto finish;
+  }
+
+  if (g_strcmp0 (old_unique_id, unique_id) == 0) {
+    GST_DEBUG_OBJECT (core_audio, "Already using device %s (%d)", unique_id,
+        (int) old_device_id);
     goto finish;
   }
 
   core_audio->device_id = device_id;
+  g_free (core_audio->unique_id);
+  core_audio->unique_id = g_strdup (unique_id);
 
   if (!gst_core_audio_select_device (core_audio)) {
     /* This doesn't change is_default/unique_id unless it succeeds */
@@ -626,29 +635,35 @@ gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
     /* When bind_device() fails, AudioUnit will usually shut itself down,
      * so we need to bind back to the old device and restart our unit */
     ret = FALSE;
-    GST_ERROR_OBJECT (core_audio,
-        "Failed to bind to device %d, reverting", (int) device_id);
+    if (unique_id)
+      GST_ERROR_OBJECT (core_audio, "Failed to bind to device %s, reverting",
+          unique_id);
+    else
+      GST_ERROR_OBJECT (core_audio, "Failed to bind to device %i, reverting",
+          (int) device_id);
 
     /* select_device() changes these, so let's rewind */
     core_audio->device_id = old_device_id;
     core_audio->is_default = old_is_default;
     g_free (core_audio->unique_id);
     core_audio->unique_id = old_unique_id;
-    old_unique_id = NULL;
 
     /* This can also fail in very rare cases (e.g. the original device got unplugged 
      * in the meantime), stop the ringbuffer and shut things down when that happens */
     if (!gst_core_audio_bind_device (core_audio)
         || !gst_core_audio_start_processing (core_audio)) {
-      GST_ERROR_OBJECT (core_audio, "Failed to revert to device %d",
-          (int) old_device_id);
+      GST_ERROR_OBJECT (core_audio, "Failed to revert to device %s (%d)",
+          old_unique_id, (int) old_device_id);
 
       gst_audio_ring_buffer_set_errored (base_ringbuf);
       GST_AUDIO_RING_BUFFER_SIGNAL (base_ringbuf);
     } else {
-      GST_DEBUG_OBJECT (core_audio, "Reverted to device %d",
-          (int) old_device_id);
+      GST_DEBUG_OBJECT (core_audio, "Reverted to device %s (%d)",
+          old_unique_id, (int) old_device_id);
     }
+
+    /* We transferred ownership to core_audio above */
+    old_unique_id = NULL;
   } else {
     GST_DEBUG_OBJECT (core_audio, "Changed active device to %d",
         (int) device_id);

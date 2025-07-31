@@ -71,6 +71,7 @@ GstAudioChannelPosition gst_core_audio_channel_label_to_gst (AudioChannelLabel l
 
 #ifndef HAVE_IOS
 gboolean gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
+                                               const char * unique_id,
                                                AudioDeviceID device_id,
                                                gboolean is_src);
 
