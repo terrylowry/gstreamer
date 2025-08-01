@@ -1063,6 +1063,7 @@ gst_core_audio_get_samples_and_latency_impl (GstCoreAudio * core_audio,
       return FALSE;
     }
 
+    // *latency = 0;
     *samples = *latency * rate;
   }
   return TRUE;

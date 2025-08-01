@@ -107,9 +107,13 @@ gst_core_audio_init (GstCoreAudio * core_audio)
 #ifndef HAVE_IOS
   core_audio->hog_pid = -1;
   core_audio->disabled_mixing = FALSE;
+
   core_audio->last_sample_ts = 0;
   core_audio->last_sample_host_time = 0;
   core_audio->sample_ts_offset = 0;
+  core_audio->expected_sample_pos = 0;
+  core_audio->last_segdone = 0;
+  core_audio->is_first = TRUE;
 #else
   core_audio->configure_session = FALSE;
 #endif
@@ -243,6 +247,9 @@ gst_core_audio_close (GstCoreAudio * core_audio)
   core_audio->last_sample_ts = 0;
   core_audio->last_sample_host_time = 0;
   core_audio->sample_ts_offset = 0;
+  core_audio->expected_sample_pos = 0;
+  core_audio->last_segdone = 0;
+  core_audio->is_first = TRUE;
 
   AudioComponentInstanceDispose (core_audio->audiounit);
   core_audio->audiounit = NULL;

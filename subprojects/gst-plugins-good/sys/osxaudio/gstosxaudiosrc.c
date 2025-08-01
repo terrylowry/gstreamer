@@ -509,7 +509,9 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
   gint offset = 0;
   guint64 sample_position;
   GstAudioRingBufferSpec *spec = &GST_AUDIO_RING_BUFFER (buf)->spec;
+  gint segsize = GST_AUDIO_RING_BUFFER (buf)->spec.segsize;
   guint bpf = GST_AUDIO_INFO_BPF (&spec->info);
+  guint64 gap_timestamp, gap_size = 0;
 
   GST_LOG_OBJECT (buf, "in sample position %f frames %u",
       inTimeStamp->mSampleTime, inNumberFrames);
@@ -565,6 +567,74 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
   sample_position -= buf->core_audio->first_sample_time;
 #endif
 
+  /* Try to detect gaps in sample positions.
+   * - Received pos > expected pos means either there was a hiccup, or we switched
+   *   devices but didn't reinitialize the ringbuffer. Just fill the gap with silence.
+   * - Received pos < expected means we switched devices and reinited the ringbuf.
+   *   Need to apply offset to all further timestamps and fill the gap caused by switching
+   *   with silence, based on the measured host time spent switching. */
+  if (buf->core_audio->is_first) {
+    buf->core_audio->expected_sample_pos = sample_position + remaining / bpf;
+    buf->core_audio->is_first = FALSE;
+  } else if (sample_position > buf->core_audio->expected_sample_pos) {
+    GST_DEBUG ("Sample ahead of expected %llu, got %llu",
+        buf->core_audio->expected_sample_pos, sample_position);
+
+    gap_size = (sample_position - buf->core_audio->expected_sample_pos) * bpf;
+    gap_timestamp = buf->core_audio->last_sample_ts;
+  } else if (sample_position < buf->core_audio->expected_sample_pos) {
+    GstClockTime time_spent_switching =
+        host_current_time_ns (buf->core_audio) -
+        buf->core_audio->last_sample_host_time;
+    guint samples_spent_switching =
+        gst_util_uint64_scale_int (time_spent_switching,
+        GST_AUDIO_INFO_RATE (&spec->info), GST_SECOND);
+
+    GST_DEBUG ("Sample pos behind expected %llu, got %llu",
+        buf->core_audio->expected_sample_pos, sample_position);
+
+    gap_size = samples_spent_switching * bpf;
+    gap_timestamp =
+        buf->core_audio->last_sample_ts + buf->core_audio->sample_ts_offset;
+    buf->core_audio->sample_ts_offset = gap_timestamp + time_spent_switching;
+
+    gst_audio_ring_buffer_set_segdone (GST_AUDIO_RING_BUFFER (buf),
+        buf->core_audio->last_segdone);
+  }
+
+  buf->core_audio->expected_sample_pos = sample_position + remaining / bpf;
+
+  while (gap_size > 0) {
+    if (!gst_audio_ring_buffer_prepare_read (GST_AUDIO_RING_BUFFER (buf),
+            &writeseg, &writeptr, &len))
+      return 0;
+
+    len -= buf->segoffset;
+    if (len > gap_size)
+      len = gap_size;
+
+    gst_audio_format_info_fill_silence (spec->info.finfo,
+        writeptr + buf->segoffset, len);
+
+    buf->segoffset += len;
+    gap_size -= len;
+
+    if ((gint) buf->segoffset == segsize) {
+      gap_timestamp +=
+          gst_util_uint64_scale_int (segsize /
+          bpf, GST_SECOND, GST_AUDIO_INFO_RATE (&spec->info));
+
+      gst_audio_ring_buffer_set_timestamp (GST_AUDIO_RING_BUFFER (buf),
+          writeseg, gap_timestamp);
+
+      gst_audio_ring_buffer_advance (GST_AUDIO_RING_BUFFER (buf), 1);
+      buf->segoffset = 0;
+
+      GST_DEBUG_OBJECT (buf, "Wrote silence at timestamp %"
+          GST_TIME_FORMAT, GST_TIME_ARGS (gap_timestamp));
+    }
+  }
+
   while (remaining) {
     if (!gst_audio_ring_buffer_prepare_read (GST_AUDIO_RING_BUFFER (buf),
             &writeseg, &writeptr, &len))
@@ -584,37 +654,29 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
     remaining -= len;
     sample_position += len / bpf;
 
-    if ((gint) buf->segoffset == GST_AUDIO_RING_BUFFER (buf)->spec.segsize) {
+    if ((gint) buf->segoffset == segsize) {
       guint64 first_sample_pos;
       GstClockTime first_sample_ts;
       GstClockTime sample_ts =
           gst_util_uint64_scale_int (sample_position, GST_SECOND,
           GST_AUDIO_INFO_RATE (&spec->info));
-      GstClockTime host_time = host_current_time_ns (buf->core_audio);
-
-      if (sample_ts < buf->core_audio->last_sample_ts) {
-        buf->core_audio->sample_ts_offset =
-            buf->core_audio->last_sample_ts + buf->core_audio->sample_ts_offset;
-        buf->core_audio->sample_ts_offset +=
-            host_time - buf->core_audio->last_sample_host_time;
-
-        GST_DEBUG_OBJECT (buf,
-            "Device switch detected, applying ts offset: last ts %"
-            GST_TIME_FORMAT ", host time spent switching %" GST_TIME_FORMAT
-            ", total offset %" GST_TIME_FORMAT,
-            GST_TIME_ARGS (buf->core_audio->last_sample_ts),
-            GST_TIME_ARGS (host_time - buf->core_audio->last_sample_host_time),
-            GST_TIME_ARGS (buf->core_audio->sample_ts_offset));
-      }
 
       buf->core_audio->last_sample_ts = sample_ts;
-      buf->core_audio->last_sample_host_time = host_time;
+      buf->core_audio->last_sample_host_time =
+          host_current_time_ns (buf->core_audio);
 
       /* Calculate the timestamp corresponding to the first sample in the segment */
       first_sample_pos = sample_position - (spec->segsize / bpf);
       first_sample_ts = gst_util_uint64_scale_int (first_sample_pos, GST_SECOND,
           GST_AUDIO_INFO_RATE (&spec->info));
       first_sample_ts += buf->core_audio->sample_ts_offset;
+
+      GST_INFO_OBJECT (buf,
+          "Writing segment %d, first sample position %llu, first sample ts %"
+          GST_TIME_FORMAT ", host time %"
+          GST_TIME_FORMAT, writeseg, first_sample_pos,
+          GST_TIME_ARGS (first_sample_ts),
+          GST_TIME_ARGS (buf->core_audio->last_sample_host_time));
 
       gst_audio_ring_buffer_set_timestamp (GST_AUDIO_RING_BUFFER (buf),
           writeseg, first_sample_ts);
@@ -631,6 +693,10 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
       buf->segoffset = 0;
     }
   }
+
+  buf->core_audio->last_segdone =
+      gst_audio_ring_buffer_get_segdone (GST_AUDIO_RING_BUFFER (buf));
+
   return 0;
 }
 
