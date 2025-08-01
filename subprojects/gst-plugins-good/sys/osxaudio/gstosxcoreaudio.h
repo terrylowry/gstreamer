@@ -127,6 +127,9 @@ struct _GstCoreAudio
   GstClockTime last_sample_ts;
   GstClockTime last_sample_host_time;
   GstClockTime sample_ts_offset;
+  guint64 expected_sample_pos;
+  guint64 last_segdone;
+  gboolean is_first;
 
 #ifdef HAVE_IOS
   gdouble first_sample_time;
