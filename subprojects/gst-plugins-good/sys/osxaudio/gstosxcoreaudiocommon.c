@@ -215,6 +215,8 @@ gst_core_audio_bind_device (GstCoreAudio * core_audio)
         (int) status);
     goto audiounit_error;
   }
+  GST_DEBUG_OBJECT (core_audio->osxbuf, "FINISHED Bind AudioUnit to device %s",
+      core_audio->unique_id);
   return TRUE;
 
 audiounit_error:
@@ -612,6 +614,7 @@ gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
     GST_ERROR_OBJECT (core_audio, "Device %d not found or not usable",
         (int) device_id);
     core_audio->device_id = old_device_id;
+    // TODO: what about unique_id?
     ret = FALSE;
     goto finish;
   }
@@ -625,8 +628,7 @@ gst_core_audio_change_ringbuf_device (GstOsxAudioRingBuffer * ringbuf,
   }
 
   if (is_src) {
-    /* For inputs we always have to recreate the ringbuffer, as AudioUnitRender()
-     * doesn't want to resample. Set the flag and reinitialize in create(). */
+    /* resample etc., all set in create() */
     core_audio->device_change_pending = TRUE;
     goto finish;
   }

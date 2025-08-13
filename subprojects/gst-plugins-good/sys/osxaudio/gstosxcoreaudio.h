@@ -106,6 +106,14 @@ struct _GstCoreAudio
   AudioStreamBasicDescription recFormat;
   guint32 inNumberFrames;
   gboolean device_change_pending;
+  gboolean needs_convert;
+  GstAudioConverter *converter;
+
+  guint device_sample_rate;
+
+  gboolean switch_in_progress;
+  gboolean waiting_for_first_ioproc;
+  AudioStreamBasicDescription ringbuf_format;
 
 #ifndef HAVE_IOS
   /* For SPDIF out */
@@ -184,6 +192,10 @@ gboolean gst_core_audio_select_device                        (GstCoreAudio * cor
 void gst_core_audio_prepare_input_buffer_list                (GstCoreAudio * core_audio,
                                                               AudioStreamBasicDescription format,
                                                               guint32 frames_per_packet);
+
+void gst_core_audio_prepare_input_buffer_list_convert                (GstCoreAudio * core_audio,
+                                                        AudioStreamBasicDescription format,
+                                                        guint32 frames_per_packet);                                                       
 
 GstCaps *
 gst_core_audio_probe_caps (GstCoreAudio * core_audio, GstCaps * in_caps);

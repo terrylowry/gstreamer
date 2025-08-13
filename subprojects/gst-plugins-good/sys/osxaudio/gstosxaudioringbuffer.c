@@ -243,6 +243,8 @@ gst_osx_audio_ring_buffer_acquire (GstAudioRingBuffer * buf,
   ret = gst_core_audio_initialize (osxbuf->core_audio, format, spec->caps,
       frames_per_packet, is_passthrough);
 
+  osxbuf->core_audio->ringbuf_format = format;
+
   if (!ret) {
     g_free (buf->memory);
     buf->memory = NULL;
@@ -310,8 +312,13 @@ gst_osx_audio_ring_buffer_delay (GstAudioRingBuffer * buf)
 
   osxbuf = GST_OSX_AUDIO_RING_BUFFER (buf);
 
+  guint rate =
+      // osxbuf->core_audio->needs_resampling ?
+      // osxbuf->core_audio->device_sample_rate :
+      GST_AUDIO_INFO_RATE (&buf->spec.info);
+
   if (!gst_core_audio_get_samples_and_latency (osxbuf->core_audio,
-          GST_AUDIO_INFO_RATE (&buf->spec.info), &samples, &latency)) {
+          rate, &samples, &latency)) {
     return 0;
   }
   return samples;
