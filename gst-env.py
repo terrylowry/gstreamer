@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import sys
 import argparse
 import glob
 import json
@@ -212,7 +213,7 @@ def setup_gdb(options):
     if not shutil.which('gdb'):
         return python_paths
 
-    bdir = pathlib.Path(options.builddir).resolve()
+    bdir = Path(options.builddir).resolve()
     for libpath, gdb_path in [
             (os.path.join("subprojects", "gstreamer", "gst"),
              os.path.join("subprojects", "gstreamer", "libs", "gst", "helpers")),
@@ -370,6 +371,7 @@ def get_subprocess_env(options, gst_version):
     global GSTPLUGIN_FILEPATH_REG_TEMPLATE
     GSTPLUGIN_FILEPATH_REG_TEMPLATE = GSTPLUGIN_FILEPATH_REG_TEMPLATE.format(libdir=libdir.as_posix())
 
+    bdir = Path(options.builddir).resolve()
     for target in targets:
         filenames = listify(target['filename'])
         if not target['installed']:
@@ -394,6 +396,30 @@ def get_subprocess_env(options, gst_version):
                 prepend_env_var(env, 'GIO_EXTRA_MODULES',
                                 os.path.join(options.builddir, root),
                                 options.sysroot)
+        # On Windows, we should add DLLs for external (non-subproject) deps to PATH
+        if os.name == 'nt':
+            target_sources = target['target_sources']
+            for child in target_sources:
+                # Find the linker arguments and extract the import libraries
+                # that the target links to. We then use those to guess the DLL
+                # path.
+                if 'linker' not in child:
+                    continue
+                arg_prefix = '/' if 'link' in child['linker'] else '-'
+                for link_arg in child['parameters']:
+                    if link_arg.startswith(arg_prefix) or not link_arg.endswith('.lib'):
+                        # Skip linker arguments
+                        continue
+                    if not os.path.isabs(link_arg):
+                        continue
+                    norm = Path(link_arg).resolve()
+                    if norm.is_relative_to(bdir):
+                        continue
+                    bindir = norm.parent.parent / 'bin'
+                    if bindir.is_dir():
+                        prepend_env_var(env, 'PATH', str(bindir), options.sysroot)
+                    else:
+                        print(f"WARNING: Could not find DLL for import library {norm}, used by '{os.path.basename(filename)}'", file=sys.stderr)
 
     # Search for the Plugin paths file either in the build directory root
     # or check if gstreamer is a subproject of another project
