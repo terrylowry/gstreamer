@@ -114,6 +114,8 @@ gst_core_audio_init (GstCoreAudio * core_audio)
   core_audio->expected_sample_pos = 0;
   core_audio->last_segdone = 0;
   core_audio->is_first = TRUE;
+  core_audio->switch_in_progress = FALSE;
+  core_audio->waiting_for_first_ioproc = FALSE;
 #else
   core_audio->configure_session = FALSE;
 #endif
@@ -318,26 +320,28 @@ gboolean
 gst_core_audio_get_samples_and_latency (GstCoreAudio * core_audio,
     gdouble rate, guint * samples, gdouble * latency)
 {
-  uint64_t now_ns = host_current_time_ns (core_audio);
+  CORE_AUDIO_TIMING_LOCK (core_audio);
+
+  // TODO: sample count from this isn't actually
   gboolean ret = gst_core_audio_get_samples_and_latency_impl (core_audio, rate,
       samples, latency);
 
   if (!ret)
     return FALSE;
 
-  CORE_AUDIO_TIMING_LOCK (core_audio);
-
   uint32_t samples_remain = 0;
   uint64_t anchor_ns = core_audio->anchor_hosttime_ns;
+  uint64_t now_ns = host_current_time_ns (core_audio);
 
   if (core_audio->is_src) {
     int64_t captured_ns =
         core_audio->rate_scalar * (int64_t) (now_ns - anchor_ns);
+    gboolean switching = core_audio->switch_in_progress;
 
     /* src, the anchor time is the timestamp of the first sample in the last
      * packet received, and we increment up from there, unless the device gets stopped. */
     if (captured_ns > 0) {
-      if (core_audio->io_proc_active) {
+      if (core_audio->io_proc_active || switching) {
         samples_remain = (uint32_t) (captured_ns * rate / GST_SECOND);
       } else {
         samples_remain = core_audio->anchor_pend_samples;
@@ -415,8 +419,8 @@ gst_core_audio_prepare_input_buffer_list (GstCoreAudio * core_audio,
   core_audio->recBufferSize = frames_per_packet * format.mBytesPerFrame;
 
   GST_DEBUG_OBJECT (core_audio,
-      "Allocating record buffers %u bytes %u frames",
-      core_audio->recBufferSize, frames_per_packet);
+      "Allocating record buffers %u bytes %u frames %u channels",
+      core_audio->recBufferSize, frames_per_packet, format.mChannelsPerFrame);
 
   core_audio->recBufferList =
       buffer_list_alloc (format.mChannelsPerFrame, core_audio->recBufferSize,
