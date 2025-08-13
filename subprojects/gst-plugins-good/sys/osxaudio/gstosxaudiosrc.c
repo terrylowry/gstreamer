@@ -378,22 +378,140 @@ gst_osx_audio_src_create (GstBaseSrc * bsrc, guint64 offset, guint length,
   if (core_audio->device_change_pending) {
     GST_DEBUG_OBJECT (osxsrc, "Device switch requested!");
 
-    if (!gst_core_audio_bind_device (core_audio)) {
-      GST_ERROR_OBJECT (osxsrc, "Failed to bind to new device %d",
-          (int) core_audio->device_id);
+    // CORE_AUDIO_TIMING_LOCK (core_audio);
 
-      GST_OBJECT_UNLOCK (osxbuf);
-      return GST_FLOW_ERROR;
-    }
+    AudioStreamBasicDescription old_format;
+    AudioStreamBasicDescription device_format;
+    UInt32 size = sizeof (AudioStreamBasicDescription);
+    AudioUnitGetProperty (core_audio->audiounit,
+        kAudioUnitProperty_StreamFormat,
+        kAudioUnitScope_Input, 1, &old_format, &size);
+
+    GST_ERROR ("OLD ABSD: " CORE_AUDIO_FORMAT,
+        CORE_AUDIO_FORMAT_ARGS (old_format));
+
+    // this should disable the 'io-proc-stopped' case in gst_core_audio_get_samples_and_latency()
+    // the delay accumulated there should be our offset later
+    // this will be toggled off as soon as update_timing() is first called after the switch completes
+    CORE_AUDIO_TIMING_LOCK (core_audio);
+    core_audio->switch_in_progress = TRUE;
+    CORE_AUDIO_TIMING_UNLOCK (core_audio);
+
     GST_OBJECT_UNLOCK (osxbuf);
+    gst_core_audio_io_proc_stop (core_audio);
+    GST_OBJECT_LOCK (osxbuf);
+    GST_DEBUG_OBJECT (core_audio, "stopped ioproc for device change");
 
-    if (!gst_base_src_negotiate (bsrc)) {
-      GST_ERROR_OBJECT (osxsrc, "Failed to negotiate caps for new device %d",
-          (int) core_audio->device_id);
-      return GST_FLOW_NOT_NEGOTIATED;
+    // GST_OBJECT_UNLOCK (osxbuf);
+    gst_core_audio_bind_device (core_audio);
+    // GST_OBJECT_LOCK (osxbuf);
+
+    // get device format
+    AudioUnitGetProperty (core_audio->audiounit,
+        kAudioUnitProperty_StreamFormat,
+        kAudioUnitScope_Input, 1, &device_format, &size);
+
+    GST_ERROR ("ABSD: " CORE_AUDIO_FORMAT,
+        CORE_AUDIO_FORMAT_ARGS (device_format));
+
+    GstAudioRingBufferSpec spec = GST_AUDIO_RING_BUFFER (osxbuf)->spec;
+    gint ringbuf_rate = spec.info.rate;
+
+    GST_ERROR ("Device sample rate %d, ringbuffer rate %d",
+        (int) device_format.mSampleRate, ringbuf_rate);
+
+    AudioStreamBasicDescription ringbuf_format = core_audio->ringbuf_format;
+
+    if (device_format.mSampleRate != ringbuf_format.mSampleRate ||
+        device_format.mChannelsPerFrame != ringbuf_format.mChannelsPerFrame ||
+        device_format.mFormatID != ringbuf_format.mFormatID ||
+        device_format.mFormatFlags != ringbuf_format.mFormatFlags ||
+        device_format.mBytesPerPacket != ringbuf_format.mBytesPerPacket ||
+        device_format.mFramesPerPacket != ringbuf_format.mFramesPerPacket ||
+        device_format.mBytesPerFrame != ringbuf_format.mBytesPerFrame ||
+        device_format.mBitsPerChannel != ringbuf_format.mBitsPerChannel) {
+      GST_ERROR
+          ("Device format %d channels, %d rate does not match ringbuffer %d channels, %d rate or something else",
+          (int) device_format.mChannelsPerFrame,
+          (int) device_format.mSampleRate, spec.info.channels, ringbuf_rate);
+      GstCaps *in_caps =
+          gst_core_audio_asbd_to_caps (&device_format, core_audio->device_id,
+          NULL);
+      GstAudioInfo in_info;
+      core_audio->needs_convert = TRUE;
+
+      if (!gst_audio_info_from_caps (&in_info, in_caps)) {
+        GST_ERROR_OBJECT (osxsrc,
+            "Failed to convert new device format to audio info");
+        gst_caps_unref (in_caps);
+        GST_OBJECT_UNLOCK (osxbuf);
+        return GST_FLOW_ERROR;
+      }
+
+      gst_caps_unref (in_caps);
+
+      if (core_audio->converter) {
+        gst_audio_converter_free (core_audio->converter);
+      }
+
+      core_audio->converter =
+          gst_audio_converter_new (GST_AUDIO_CONVERTER_FLAG_NONE, &in_info,
+          &spec.info, NULL);
+
+      // main problem: unpositioned channels (like blackhole 64ch)
+      if (!core_audio->converter) {
+        GST_ERROR_OBJECT (osxsrc,
+            "Failed to create audio converter for new device format");
+        GST_OBJECT_UNLOCK (osxbuf);
+        return GST_FLOW_ERROR;
+      }
+
+      core_audio->device_sample_rate = (int) device_format.mSampleRate;
+    } else {
+      GST_DEBUG_OBJECT (osxsrc,
+          "Device format matches ringbuffer, no resampling needed");
+      core_audio->needs_convert = FALSE;
+      if (core_audio->converter) {
+        gst_audio_converter_free (core_audio->converter);
+        core_audio->converter = NULL;
+      }
     }
 
-    GST_OBJECT_LOCK (osxbuf);
+    // re-do what gst_core_audio_initialize_impl() does usually
+    gst_core_audio_set_format (core_audio, device_format);
+    gst_core_audio_set_channel_layout (core_audio,
+        device_format.mChannelsPerFrame, spec.caps);
+
+    // guint32 frame_size = spec.segsize / GST_AUDIO_INFO_BPF (&spec.info);
+    guint32 cur_frame_size;
+    UInt32 propertySize = sizeof (cur_frame_size);
+    OSStatus status;
+    status = AudioUnitGetProperty (core_audio->audiounit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0,       /* N/A for global */
+        &cur_frame_size, &propertySize);
+    // guint frames_per_packet = spec.segsize / GST_AUDIO_INFO_BPF (&spec.info);
+    // guint fpp_div_by_rate = cur_frame_size / ringbuf_rate;
+
+
+    // logic fromgst_osx_audio_ring_buffer_acquire
+    // aims to make the new device give us the same amount/frequency of data after resampling
+    // as the old device did without
+    guint frames_per_packet =
+        (spec.latency_time * (guint) device_format.mSampleRate /
+        G_USEC_PER_SEC);
+    if (!status && frames_per_packet != cur_frame_size) {
+      status = AudioUnitSetProperty (core_audio->audiounit, kAudioDevicePropertyBufferFrameSize, kAudioUnitScope_Global, 0,     /* N/A for global */
+          &frames_per_packet, propertySize);
+      if (status) {
+        GST_WARNING_OBJECT (core_audio->osxbuf,
+            "Failed to set desired frame size of %u: %d", frames_per_packet,
+            (int) status);
+      }
+    }
+
+    core_audio->recFormat = device_format;
+    core_audio->waiting_for_first_ioproc = TRUE;
+    gst_core_audio_io_proc_start (core_audio);
+
     core_audio->device_change_pending = FALSE;
     GST_DEBUG_OBJECT (osxsrc, "Completed device switch to %d",
         (int) core_audio->device_id);
@@ -501,7 +619,7 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
     UInt32 inBusNumber, UInt32 inNumberFrames, AudioBufferList * bufferList)
 {
   OSStatus status;
-  guint8 *writeptr;
+  guint8 *writeptr, *readptr;
   gint writeseg;
   gint len;
   gint remaining;
@@ -510,15 +628,16 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
   guint64 sample_position;
   GstAudioRingBufferSpec *spec = &GST_AUDIO_RING_BUFFER (buf)->spec;
   gint segsize = GST_AUDIO_RING_BUFFER (buf)->spec.segsize;
-  guint bpf = GST_AUDIO_INFO_BPF (&spec->info);
-  guint64 gap_timestamp, gap_size = 0;
 
   GST_LOG_OBJECT (buf, "in sample position %f frames %u",
       inTimeStamp->mSampleTime, inNumberFrames);
 
   /* inNumberFrames will usually change after a device switch,
    * in which case we need to re-prepare our buffer list */
-  if (inNumberFrames != buf->core_audio->inNumberFrames) {
+  // TODO: sometimes after switch the size (inNumberFrames) might be the same,
+  // but the channel count is different so we need to re-prepare anyway!
+  if (inNumberFrames != buf->core_audio->inNumberFrames
+      || buf->core_audio->waiting_for_first_ioproc) {
     GST_DEBUG_OBJECT (buf,
         "Recreating input buffer list for %u frames per packet",
         inNumberFrames);
@@ -553,9 +672,60 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
   /* TODO: To support non-interleaved audio, go over all mBuffers,
    *       not just the first one. */
 
+  readptr = buf->core_audio->recBufferList->mBuffers[0].mData;
   remaining = buf->core_audio->recBufferList->mBuffers[0].mDataByteSize;
   sample_position = inTimeStamp->mSampleTime;
 
+  if (buf->core_audio->needs_convert) {
+    guint8 *outbuf;
+    gsize outbuf_size;
+
+    g_assert (buf->core_audio->converter != NULL);
+
+    gboolean res = gst_audio_converter_convert (buf->core_audio->converter,
+        GST_AUDIO_CONVERTER_FLAG_NONE,
+        readptr,
+        remaining,
+        (gpointer) & outbuf, &outbuf_size);
+
+    readptr = outbuf;
+    remaining = outbuf_size;
+
+    GST_TRACE ("Resampling returned %d, outbuf size %zu", res, outbuf_size);
+  }
+
+  if (buf->core_audio->waiting_for_first_ioproc) {
+    // calculate how much it took us to switch
+    // same calculations as in gst_core_audio_get_samples_and_latency()
+    // take the time spent switching and add to segdone as samples processed
+    // to keep the clock correct
+    CORE_AUDIO_TIMING_LOCK (buf->core_audio);
+    uint64_t anchor_ns = buf->core_audio->anchor_hosttime_ns;
+    uint64_t now_ns = host_current_time_ns (buf->core_audio);
+    uint64_t spent_switching_ns = now_ns - anchor_ns;
+
+    // do something with segdone since that's what gst_audio_base_src_get_time() uses
+    gint samples_per_seg = GST_AUDIO_RING_BUFFER (buf)->samples_per_seg;
+    gint rate = GST_AUDIO_RING_BUFFER (buf)->spec.info.rate;
+
+    // todo: maybe guint64 scale or smth?
+    uint32_t samples_spent_switching = spent_switching_ns * rate / GST_SECOND;
+
+    guint segments_spent_switching = samples_spent_switching / samples_per_seg;
+
+    guint samples_leftover = samples_spent_switching % samples_per_seg;
+
+    gst_audio_ring_buffer_advance (GST_AUDIO_RING_BUFFER (buf),
+        segments_spent_switching);
+
+    // buf->segoffset = samples_leftover;
+    buf->segoffset = 0;
+    CORE_AUDIO_TIMING_UNLOCK (buf->core_audio);
+
+    GST_ERROR ("Spent switching %llu ns, samples %u, segments %u, leftover %u",
+        (unsigned long long) spent_switching_ns, samples_spent_switching,
+        segments_spent_switching, samples_leftover);
+  }
 #ifdef HAVE_IOS
   /* Timestamps don't always start from 0 on iOS, have to offset */
   if (buf->core_audio->first_sample_time == -1) {
@@ -567,74 +737,6 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
   sample_position -= buf->core_audio->first_sample_time;
 #endif
 
-  /* Try to detect gaps in sample positions.
-   * - Received pos > expected pos means either there was a hiccup, or we switched
-   *   devices but didn't reinitialize the ringbuffer. Just fill the gap with silence.
-   * - Received pos < expected means we switched devices and reinited the ringbuf.
-   *   Need to apply offset to all further timestamps and fill the gap caused by switching
-   *   with silence, based on the measured host time spent switching. */
-  if (buf->core_audio->is_first) {
-    buf->core_audio->expected_sample_pos = sample_position + remaining / bpf;
-    buf->core_audio->is_first = FALSE;
-  } else if (sample_position > buf->core_audio->expected_sample_pos) {
-    GST_DEBUG ("Sample ahead of expected %llu, got %llu",
-        buf->core_audio->expected_sample_pos, sample_position);
-
-    gap_size = (sample_position - buf->core_audio->expected_sample_pos) * bpf;
-    gap_timestamp = buf->core_audio->last_sample_ts;
-  } else if (sample_position < buf->core_audio->expected_sample_pos) {
-    GstClockTime time_spent_switching =
-        host_current_time_ns (buf->core_audio) -
-        buf->core_audio->last_sample_host_time;
-    guint samples_spent_switching =
-        gst_util_uint64_scale_int (time_spent_switching,
-        GST_AUDIO_INFO_RATE (&spec->info), GST_SECOND);
-
-    GST_DEBUG ("Sample pos behind expected %llu, got %llu",
-        buf->core_audio->expected_sample_pos, sample_position);
-
-    gap_size = samples_spent_switching * bpf;
-    gap_timestamp =
-        buf->core_audio->last_sample_ts + buf->core_audio->sample_ts_offset;
-    buf->core_audio->sample_ts_offset = gap_timestamp + time_spent_switching;
-
-    gst_audio_ring_buffer_set_segdone (GST_AUDIO_RING_BUFFER (buf),
-        buf->core_audio->last_segdone);
-  }
-
-  buf->core_audio->expected_sample_pos = sample_position + remaining / bpf;
-
-  while (gap_size > 0) {
-    if (!gst_audio_ring_buffer_prepare_read (GST_AUDIO_RING_BUFFER (buf),
-            &writeseg, &writeptr, &len))
-      return 0;
-
-    len -= buf->segoffset;
-    if (len > gap_size)
-      len = gap_size;
-
-    gst_audio_format_info_fill_silence (spec->info.finfo,
-        writeptr + buf->segoffset, len);
-
-    buf->segoffset += len;
-    gap_size -= len;
-
-    if ((gint) buf->segoffset == segsize) {
-      gap_timestamp +=
-          gst_util_uint64_scale_int (segsize /
-          bpf, GST_SECOND, GST_AUDIO_INFO_RATE (&spec->info));
-
-      gst_audio_ring_buffer_set_timestamp (GST_AUDIO_RING_BUFFER (buf),
-          writeseg, gap_timestamp);
-
-      gst_audio_ring_buffer_advance (GST_AUDIO_RING_BUFFER (buf), 1);
-      buf->segoffset = 0;
-
-      GST_DEBUG_OBJECT (buf, "Wrote silence at timestamp %"
-          GST_TIME_FORMAT, GST_TIME_ARGS (gap_timestamp));
-    }
-  }
-
   while (remaining) {
     if (!gst_audio_ring_buffer_prepare_read (GST_AUDIO_RING_BUFFER (buf),
             &writeseg, &writeptr, &len))
@@ -645,57 +747,39 @@ gst_osx_audio_src_io_proc (GstOsxAudioRingBuffer * buf,
     if (len > remaining)
       len = remaining;
 
-    memcpy (writeptr + buf->segoffset,
-        (char *) buf->core_audio->recBufferList->mBuffers[0].mData + offset,
-        len);
+    memcpy (writeptr + buf->segoffset, (char *) readptr + offset, len);
 
     buf->segoffset += len;
     offset += len;
     remaining -= len;
-    sample_position += len / bpf;
 
     if ((gint) buf->segoffset == segsize) {
-      guint64 first_sample_pos;
-      GstClockTime first_sample_ts;
-      GstClockTime sample_ts =
-          gst_util_uint64_scale_int (sample_position, GST_SECOND,
-          GST_AUDIO_INFO_RATE (&spec->info));
-
-      buf->core_audio->last_sample_ts = sample_ts;
-      buf->core_audio->last_sample_host_time =
-          host_current_time_ns (buf->core_audio);
-
-      /* Calculate the timestamp corresponding to the first sample in the segment */
-      first_sample_pos = sample_position - (spec->segsize / bpf);
-      first_sample_ts = gst_util_uint64_scale_int (first_sample_pos, GST_SECOND,
-          GST_AUDIO_INFO_RATE (&spec->info));
-      first_sample_ts += buf->core_audio->sample_ts_offset;
-
-      GST_INFO_OBJECT (buf,
-          "Writing segment %d, first sample position %llu, first sample ts %"
-          GST_TIME_FORMAT ", host time %"
-          GST_TIME_FORMAT, writeseg, first_sample_pos,
-          GST_TIME_ARGS (first_sample_ts),
-          GST_TIME_ARGS (buf->core_audio->last_sample_host_time));
-
-      gst_audio_ring_buffer_set_timestamp (GST_AUDIO_RING_BUFFER (buf),
-          writeseg, first_sample_ts);
-
       /* we wrote one segment */
+
       CORE_AUDIO_TIMING_LOCK (buf->core_audio);
-      gst_audio_ring_buffer_advance (GST_AUDIO_RING_BUFFER (buf), 1);
+
+      if (buf->core_audio->waiting_for_first_ioproc) {
+        buf->core_audio->waiting_for_first_ioproc = FALSE;
+        buf->core_audio->switch_in_progress = FALSE;
+      } else {
+        buf->segoffset = 0;
+      }
+
+      GST_DEBUG_OBJECT (buf,
+          "Wrote segment %d, offset %d, sample position %llu",
+          writeseg, buf->segoffset, sample_position);
+
       /* FIXME: Update the timestamp and reported frames in smaller increments
        * when the segment size is larger than the total inNumberFrames */
+      gst_audio_ring_buffer_advance (GST_AUDIO_RING_BUFFER (buf), 1);
+
+      // TODO: maybe recalculate inNumberFrames according to new sample rate if needed etc
       gst_core_audio_update_timing (buf->core_audio, inTimeStamp,
           inNumberFrames);
-      CORE_AUDIO_TIMING_UNLOCK (buf->core_audio);
 
-      buf->segoffset = 0;
+      CORE_AUDIO_TIMING_UNLOCK (buf->core_audio);
     }
   }
-
-  buf->core_audio->last_segdone =
-      gst_audio_ring_buffer_get_segdone (GST_AUDIO_RING_BUFFER (buf));
 
   return 0;
 }

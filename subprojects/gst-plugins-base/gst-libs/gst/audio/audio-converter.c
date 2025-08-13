@@ -1416,6 +1416,7 @@ gst_audio_converter_new (GstAudioConverterFlags flags, GstAudioInfo * in_info,
         if (is_intermediate_format (in_info->finfo->format)) {
           GST_INFO ("same formats, and passthrough mixing -> only resampling");
           convert->convert = converter_resample;
+          GST_INFO ("resampling %d to %d", in_info->rate, out_info->rate);
         }
       }
     } else if (GST_AUDIO_FORMAT_IS_ENDIAN_CONVERSION (out_info->finfo,
