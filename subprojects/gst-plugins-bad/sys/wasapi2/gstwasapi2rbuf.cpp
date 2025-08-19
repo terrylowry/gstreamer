@@ -710,15 +710,13 @@ gst_wasapi2_device_manager_create_ctx (IMMDeviceEnumerator * enumerator,
         return;
       }
 
-      auto scaps = gst_static_caps_get (&template_caps);
       GstCaps *old_caps = nullptr;
       GstCaps *new_caps = nullptr;
 
       gst_wasapi2_util_parse_waveformatex (desc->mix_format,
-          scaps, &old_caps, nullptr);
+          &old_caps, nullptr);
       gst_wasapi2_util_parse_waveformatex (closest,
-          scaps, &new_caps, nullptr);
-      gst_caps_unref (scaps);
+          &new_caps, nullptr);
 
       if (!new_caps || !old_caps) {
         GST_ERROR ("Couldn't get caps from format");
@@ -750,10 +748,8 @@ gst_wasapi2_device_manager_create_ctx (IMMDeviceEnumerator * enumerator,
     }
   }
 
-  auto scaps = gst_static_caps_get (&template_caps);
   gst_wasapi2_util_parse_waveformatex (ctx->mix_format,
-      scaps, &ctx->caps, nullptr);
-  gst_caps_unref (scaps);
+      &ctx->caps, nullptr);
 
   hr = E_FAIL;
   /* Try IAudioClient3 if low-latency is requested */
@@ -2179,10 +2175,8 @@ gst_wasapi2_rbuf_loop_thread (GstWasapi2Rbuf * self)
               if (priv->configured_allow_dummy) {
                 priv->mix_format = gst_wasapi2_get_default_mix_format ();
 
-                auto scaps = gst_static_caps_get (&template_caps);
                 gst_wasapi2_util_parse_waveformatex (priv->mix_format,
-                    scaps, &priv->caps, nullptr);
-                gst_caps_unref (scaps);
+                    &priv->caps, nullptr);
                 priv->opened = true;
 
                 cmd->hr = S_OK;
