@@ -1,0 +1,1 @@
+../../scripts/gst-indent-all.py
